@@ -290,18 +290,17 @@ Presupuesto: {project['budget']}
 Descripción: {project['description']}
 Plataforma: {project['platform']}
  
-Redacta una propuesta en español que:
-1. Abra con algo específico del proyecto (no genérico)
-2. Explique por qué este freelancer es ideal para ESTE proyecto
-3. Detalle 3-4 entregables concretos con tiempos
-4. Cierre con una pregunta que invite al cliente a responder
-5. Tono: profesional pero humano, directo, sin exageraciones
- 
-Máximo 200 palabras. Solo devuelve el texto de la propuesta."""
+Escribe una propuesta LISTA PARA ENVIAR, en español, sin títulos ni explicaciones extra.
+Instrucciones:
+1. Primer párrafo: menciona algo MUY específico del proyecto que demuestre que lo leíste
+2. Segundo párrafo: explica en 2 oraciones por qué eres la persona ideal (usa tus habilidades concretas)
+3. Tercer párrafo: lista 3 entregables con tiempos reales (ej: "Entrego primer borrador en 24h")
+4. Último párrafo: menciona tu tarifa de ${FREELANCER_PROFILE['hourly_rate_usd']} USD/hr y cierra con UNA pregunta corta y directa
+Reglas: máximo 180 palabras, tono natural y confiado, nada genérico, solo el texto de la propuesta"""
  
     try:
         resp = client.messages.create(
-            model="claude-sonnet-4-20250514",
+                        model="claude-sonnet-4-6",
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )
