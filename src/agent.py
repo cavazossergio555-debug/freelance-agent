@@ -8,7 +8,7 @@ import os
 import json
 import time
 import logging
-import requests
+import request
 from datetime import datetime
 from bs4 import BeautifulSoup
 from anthropic import Anthropic
@@ -243,7 +243,7 @@ Solo incluye proyectos con score >= 60. El índice corresponde a la posición en
  
     try:
         resp = client.messages.create(
-            model="claude-sonnet-4-20250514",
+                        model="claude-sonnet-4-6",
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )
