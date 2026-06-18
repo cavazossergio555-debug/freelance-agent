@@ -1,7 +1,7 @@
 """
 Agente de Freelance — Motor principal
-Busca proyectos en múltiples plataformas, genera propuestas y notifica al usuario.
-Plataformas: RemoteOK, PeoplePerHour, Workana
+Busca proyectos en múltiples plataformas vía APIs públicas (sin scraping HTML).
+Fuentes: RemoteOK, Remotive, Jobicy — todas con API JSON oficial, sin bloqueo de datacenter.
 """
 
 import os
@@ -36,182 +36,169 @@ FREELANCER_PROFILE = {
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
+    "Accept": "application/json",
 }
 
 seen_ids: set = set()
 
-# ──────────────────────────────────────────────────────
-#  SCRAPERS
-# ──────────────────────────────────────────────────────
+KEYWORDS = [
+    "redacción", "redactor", "escritor", "copywriting", "copywriter",
+    "traducción", "traductor", "translation", "translator",
+    "contenido", "content", "writing", "writer", "writ",
+    "artículo", "article", "blog", "seo",
+    "asistente virtual", "virtual assistant",
+    "español", "spanish", "inglés", "english", "bilingual", "bilingüe",
+    "ia", "ai", "prompts", "chatgpt", "inteligencia artificial",
+    "corrección", "proofreading", "edición", "editing",
+    "transcript", "subtitl", "localiz",
+]
+
 
 def fetch_remoteok() -> list[dict]:
-    """RemoteOK — API pública sin tag para evitar 403, filtramos por keywords."""
+    """RemoteOK API pública. Reintenta ante timeout (común en su servidor)."""
     log.info("Buscando en RemoteOK...")
-    try:
-        resp = requests.get(
-            "https://remoteok.com/api",
-            headers={**HEADERS, "Accept": "application/json"},
-            timeout=20
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        keywords = ["writ", "translat", "content", "copy", "redact", "traducc", "editor", "seo", "blog"]
-        projects = []
-        for job in data[1:]:
-            if not isinstance(job, dict):
-                continue
-            text = (job.get("position", "") + " " + " ".join(job.get("tags", []))).lower()
-            if not any(kw in text for kw in keywords):
-                continue
-            sal_min = job.get("salary_min", "")
-            sal_max = job.get("salary_max", "")
-            budget = f"${sal_min} - ${sal_max}" if sal_min and sal_max else "Ver en plataforma"
-            projects.append({
-                "id": str(job.get("id", job.get("slug", ""))),
-                "title": job.get("position", "Sin título"),
-                "budget": budget,
-                "description": BeautifulSoup(job.get("description", ""), "html.parser").get_text()[:300],
-                "url": job.get("url", "https://remoteok.com"),
-                "platform": "RemoteOK",
-                "found_at": datetime.now().isoformat(),
-            })
-            if len(projects) >= 10:
-                break
-
-        log.info(f"RemoteOK: {len(projects)} proyectos relevantes encontrados")
-        return projects
-    except Exception as e:
-        log.error(f"Error en RemoteOK: {e}")
-        return []
-
-
-def fetch_peopleperhour() -> list[dict]:
-    """PeoplePerHour — SSR, los jobs vienen en el HTML inicial."""
-    log.info("Buscando en PeoplePerHour...")
-    try:
-        search_terms = ["writing+translation", "content+writing", "copywriting"]
-        projects = []
-        seen_titles = set()
-
-        for term in search_terms:
-            url = f"https://www.peopleperhour.com/freelance-jobs?ref=nav&search={term}"
-            resp = requests.get(url, headers=HEADERS, timeout=25)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            job_cards = (
-                soup.select("li.jobs-list-item") or
-                soup.select("div.job-item") or
-                soup.select("[class*='JobCard']") or
-                soup.select("[class*='job-listing']") or
-                soup.select("article[class*='job']")
+    for attempt in range(2):
+        try:
+            resp = requests.get(
+                "https://remoteok.com/api",
+                headers=HEADERS,
+                timeout=30
             )
+            resp.raise_for_status()
+            data = resp.json()
 
-            log.info(f"PPH ({term}): {len(job_cards)} cards en HTML")
-
-            for card in job_cards[:8]:
-                title_el = (
-                    card.select_one("h2 a") or
-                    card.select_one("h3 a") or
-                    card.select_one("a[href*='/job/']") or
-                    card.select_one("[class*='title'] a")
-                )
-                desc_el = card.select_one("p") or card.select_one("[class*='desc']")
-
-                if not title_el:
+            kws = ["writ", "translat", "content", "copy", "redact", "editor", "seo", "blog"]
+            projects = []
+            for job in data[1:]:
+                if not isinstance(job, dict):
                     continue
-                title = title_el.get_text(strip=True)
-                if title in seen_titles:
+                text = (job.get("position", "") + " " + " ".join(job.get("tags", []))).lower()
+                if not any(kw in text for kw in kws):
                     continue
-                seen_titles.add(title)
+                sal_min = job.get("salary_min", "")
+                sal_max = job.get("salary_max", "")
+                budget = f"${sal_min} - ${sal_max}" if sal_min and sal_max else "Ver en plataforma"
+                projects.append({
+                    "id": "rok_" + str(job.get("id", job.get("slug", ""))),
+                    "title": job.get("position", "Sin título"),
+                    "budget": budget,
+                    "description": BeautifulSoup(job.get("description", ""), "html.parser").get_text()[:300],
+                    "url": job.get("url", "https://remoteok.com"),
+                    "platform": "RemoteOK",
+                    "found_at": datetime.now().isoformat(),
+                })
+                if len(projects) >= 10:
+                    break
 
-                href = title_el.get("href", "")
-                job_url = f"https://www.peopleperhour.com{href}" if href.startswith("/") else href or url
-                desc = desc_el.get_text(strip=True)[:300] if desc_el else ""
+            log.info(f"RemoteOK: {len(projects)} proyectos relevantes")
+            return projects
+        except requests.exceptions.Timeout:
+            log.warning(f"RemoteOK timeout (intento {attempt + 1}/2)")
+            time.sleep(3)
+        except Exception as e:
+            log.error(f"Error en RemoteOK: {e}")
+            return []
+    log.error("RemoteOK: falló tras reintentos")
+    return []
+
+
+def fetch_remotive() -> list[dict]:
+    """Remotive — API pública oficial, sin auth, categoría 'writing' incluida."""
+    log.info("Buscando en Remotive...")
+    try:
+        projects = []
+        seen_local = set()
+
+        # Categoría writing + búsqueda por keyword como respaldo
+        urls = [
+            "https://remotive.com/api/remote-jobs?category=writing",
+            "https://remotive.com/api/remote-jobs?search=translation",
+            "https://remotive.com/api/remote-jobs?search=copywriting",
+        ]
+
+        for url in urls:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            jobs = data.get("jobs", [])
+            log.info(f"Remotive ({url.split('?')[-1]}): {len(jobs)} resultados")
+
+            for job in jobs[:8]:
+                jid = "rmt_" + str(job.get("id", ""))
+                if jid in seen_local:
+                    continue
+                seen_local.add(jid)
+
+                desc_raw = job.get("description", "")
+                desc = BeautifulSoup(desc_raw, "html.parser").get_text()[:300] if desc_raw else ""
+
+                sal = job.get("salary", "") or "Ver en plataforma"
 
                 projects.append({
-                    "id": f"pph_{href}",
-                    "title": title,
-                    "budget": "Ver en plataforma",
+                    "id": jid,
+                    "title": job.get("title", "Sin título"),
+                    "budget": sal,
                     "description": desc,
-                    "url": job_url,
-                    "platform": "PeoplePerHour",
+                    "url": job.get("url", "https://remotive.com"),
+                    "platform": "Remotive",
                     "found_at": datetime.now().isoformat(),
                 })
 
             time.sleep(1)
 
-        log.info(f"PeoplePerHour: {len(projects)} proyectos encontrados")
+        log.info(f"Remotive: {len(projects)} proyectos en total")
         return projects
     except Exception as e:
-        log.error(f"Error en PeoplePerHour: {e}")
+        log.error(f"Error en Remotive: {e}")
         return []
 
 
-def fetch_workana() -> list[dict]:
-    """Workana — SSR con selectores verificados en DOM real."""
-    if not os.environ.get("WORKANA_ENABLED", "false").lower() == "true":
-        return []
-
-    log.info("Buscando en Workana...")
+def fetch_jobicy() -> list[dict]:
+    """Jobicy — API pública oficial, sin auth, soporta tag de búsqueda libre."""
+    log.info("Buscando en Jobicy...")
     try:
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        session.get("https://www.workana.com", timeout=15)
-        time.sleep(1)
-
-        urls = [
-            "https://www.workana.com/jobs?category=redaccion-traduccion&language=es",
-            "https://www.workana.com/jobs?category=marketing-digital-ventas&language=es",
-        ]
         projects = []
+        seen_local = set()
 
-        for url in urls:
-            resp = session.get(url, timeout=25)
+        tags = ["copywriting", "writing", "translation", "content"]
+
+        for tag in tags:
+            url = f"https://jobicy.com/api/v2/remote-jobs?count=10&tag={tag}"
+            resp = requests.get(url, headers=HEADERS, timeout=20)
             resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+            data = resp.json()
+            jobs = data.get("jobs", [])
+            log.info(f"Jobicy (tag={tag}): {len(jobs)} resultados")
 
-            job_cards = soup.select("div.project-item")
-            log.info(f"Workana ({url.split('category=')[-1].split('&')[0]}): {len(job_cards)} cards encontradas")
-
-            for card in job_cards[:12]:
-                title_a = card.select_one("h2.project-title a")
-                title_h2 = card.select_one("h2.project-title")
-                if not title_a and not title_h2:
+            for job in jobs:
+                jid = "job_" + str(job.get("id", ""))
+                if jid in seen_local:
                     continue
+                seen_local.add(jid)
 
-                title = (title_a or title_h2).get_text(strip=True)
-                href = title_a.get("href", "") if title_a else ""
-                job_url = f"https://www.workana.com{href}" if href.startswith("/") else href
+                desc_raw = job.get("jobExcerpt", "") or job.get("jobDescription", "")
+                desc = BeautifulSoup(desc_raw, "html.parser").get_text()[:300] if desc_raw else ""
 
-                budget_el = card.select_one("span.values") or card.select_one("div.budget")
-                budget = budget_el.get_text(strip=True) if budget_el else "Ver en plataforma"
+                sal_min = job.get("salaryMin", "")
+                sal_max = job.get("salaryMax", "")
+                budget = f"${sal_min} - ${sal_max}" if sal_min and sal_max else "Ver en plataforma"
 
-                desc_el = card.select_one("div.html-desc") or card.select_one("p.text-expander-content")
-                desc = desc_el.get_text(strip=True)[:300] if desc_el else ""
+                projects.append({
+                    "id": jid,
+                    "title": job.get("jobTitle", "Sin título"),
+                    "budget": budget,
+                    "description": desc,
+                    "url": job.get("url", "https://jobicy.com"),
+                    "platform": "Jobicy",
+                    "found_at": datetime.now().isoformat(),
+                })
 
-                if title:
-                    projects.append({
-                        "id": f"wk_{href}",
-                        "title": title,
-                        "budget": budget,
-                        "description": desc,
-                        "url": job_url,
-                        "platform": "Workana",
-                        "found_at": datetime.now().isoformat(),
-                    })
+            time.sleep(1)
 
-            time.sleep(2)
-
-        log.info(f"Workana: {len(projects)} proyectos en total")
+        log.info(f"Jobicy: {len(projects)} proyectos en total")
         return projects
     except Exception as e:
-        log.error(f"Error en Workana: {e}")
+        log.error(f"Error en Jobicy: {e}")
         return []
 
 
@@ -219,7 +206,7 @@ def generate_proposal(project: dict) -> str:
     try:
         p = FREELANCER_PROFILE
         prompt = (
-            "Eres experto en propuestas freelance para plataformas LATAM. "
+            "Eres experto en propuestas freelance. "
             "Escribe una propuesta en español, máximo 130 palabras, directa y sin relleno. "
             "Termina con una pregunta concreta al cliente.\n\n"
             f"PROYECTO en {project['platform']}:\n"
@@ -230,7 +217,11 @@ def generate_proposal(project: dict) -> str:
             f"idiomas: {', '.join(p['languages'])}, ${p['hourly_rate_usd']}/hr, disponible ahora.\n\n"
             "Devuelve solo el texto de la propuesta."
         )
-        response = client.messages.create(model="claude-sonnet-4-6", max_tokens=350, messages=[{"role": "user", "content": prompt}])
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=350,
+            messages=[{"role": "user", "content": prompt}]
+        )
         return response.content[0].text.strip()
     except Exception as e:
         log.error(f"Error generando propuesta: {e}")
@@ -241,10 +232,16 @@ def send_telegram(message: str) -> bool:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
+        log.warning("Telegram no configurado")
         return False
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        resp = requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML", "disable_web_page_preview": False}, timeout=10)
+        resp = requests.post(url, json={
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }, timeout=10)
         resp.raise_for_status()
         log.info("Telegram: OK")
         return True
@@ -265,18 +262,6 @@ def format_notification(project: dict, proposal: str) -> str:
     )
 
 
-KEYWORDS = [
-    "redacción", "redactor", "escritor", "copywriting", "copywriter",
-    "traducción", "traductor", "translation", "translator",
-    "contenido", "content", "writing", "writer", "writ",
-    "artículo", "article", "blog", "seo",
-    "asistente virtual", "virtual assistant",
-    "español", "spanish", "inglés", "english", "bilingual", "bilingüe",
-    "ia", "ai", "prompts", "chatgpt", "inteligencia artificial",
-    "corrección", "proofreading", "edición", "editing",
-    "transcript", "subtitl", "localiz",
-]
-
 def is_relevant(project: dict) -> bool:
     text = (project.get("title", "") + " " + project.get("description", "")).lower()
     return any(kw in text for kw in KEYWORDS)
@@ -285,35 +270,46 @@ def is_relevant(project: dict) -> bool:
 def run_cycle():
     log.info("=" * 55)
     log.info("Iniciando ciclo de búsqueda...")
+
     all_projects = []
     all_projects.extend(fetch_remoteok())
-    all_projects.extend(fetch_peopleperhour())
-    all_projects.extend(fetch_workana())
+    all_projects.extend(fetch_remotive())
+    all_projects.extend(fetch_jobicy())
+
     log.info(f"Total bruto: {len(all_projects)}")
+
     new_count = 0
     for project in all_projects:
         pid = project.get("id") or project.get("url", "")
         if pid in seen_ids:
             continue
         seen_ids.add(pid)
+
         if not is_relevant(project):
             log.info(f"Descartado: {project['title'][:55]}")
             continue
+
         log.info(f"✅ NUEVO [{project['platform']}]: {project['title'][:60]}")
         proposal = generate_proposal(project)
         message = format_notification(project, proposal)
         send_telegram(message)
         new_count += 1
         time.sleep(3)
+
     log.info(f"Ciclo completado. {new_count} nuevos proyectos notificados.")
 
 
 def main():
     interval = int(os.environ.get("CHECK_INTERVAL_MINUTES", "5")) * 60
-    workana_on = os.environ.get("WORKANA_ENABLED", "").lower() == "true"
-    platforms = "RemoteOK + PeoplePerHour" + (" + Workana" if workana_on else "")
+    platforms = "RemoteOK + Remotive + Jobicy"
+
     log.info(f"🤖 Agente freelance iniciado. Intervalo: {interval // 60} min | {platforms}")
-    send_telegram(f"🤖 <b>Agente iniciado</b>\nPlataformas: {platforms}\nIntervalo: cada {interval // 60} minutos.")
+    send_telegram(
+        f"🤖 <b>Agente actualizado</b>\n"
+        f"Fuentes: {platforms} (APIs oficiales, sin bloqueo)\n"
+        f"Intervalo: cada {interval // 60} minutos."
+    )
+
     while True:
         try:
             run_cycle()
